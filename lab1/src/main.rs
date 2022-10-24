@@ -1,12 +1,45 @@
-use glium::glutin;
+use glium::glutin::{self};
 use glutin::event::*;
 use glium::{uniform, Surface};
+use std::f32::consts::PI;
+use shaders::*;
+use transformations::*;
 
 mod teapot;
+mod shaders;
+mod transformations;
+
+pub struct UserDefinedParams {
+    rotation: Rotation
+}
+
+pub struct Rotation {
+    x: f32,
+    y: f32,
+    z: f32
+}
+
+impl Rotation {
+    fn vec(&self) -> [f32; 3] {
+        [self.x, self.y, self.z]
+    }
+
+    fn mutate_x_normalized(&mut self, dif: f32) {
+        self.x = (self.x + dif) % (2. * PI)
+    }
+
+    fn mutate_y_normalized(&mut self, dif: f32) {
+        self.y = (self.y + dif) % (2. * PI)
+    }
+
+    fn mutate_z_normalized(&mut self, dif: f32) {
+        self.z = (self.z + dif) % (2. * PI)
+    }
+}
 
 fn main() {
     let event_loop = glutin::event_loop::EventLoop::new();
-    let wb = glutin::window::WindowBuilder::new();
+    let wb = glutin::window::WindowBuilder::new().with_title("Flying teapot");
     let cb = glutin::ContextBuilder::new().with_depth_buffer(24);
 
     let display = glium::Display::new(wb, cb, &event_loop).unwrap();
@@ -19,39 +52,11 @@ fn main() {
         &teapot::INDICES
     ).unwrap();
 
-    let vertex_shader = r#"
-        #version 150
+    let program = glium::Program::from_source(&display, VERTEX_SHADER, pixel_shaders::ROYAL_BLUE, None).unwrap();
 
-        in vec3 position;
-        in vec3 normal;
-
-        out vec3 v_normal;
-
-        uniform mat4 perspective;
-        uniform mat4 matrix;
-
-        void main() {
-            v_normal = transpose(inverse(mat3(matrix))) * normal;
-            gl_Position = perspective * matrix * vec4(position, 1.0);
-        }
-    "#;
-
-    let pixel_shader = r#"
-        #version 150
-
-        in vec3 v_normal;
-        out vec4 color;
-        uniform vec3 u_light;
-
-        void main() {
-            float brightness = dot(normalize(v_normal), normalize(u_light));
-            vec3 dark_color = vec3(0.0, 0.6, 0.8);
-            vec3 regular_color = vec3(0.2, 0.9, 0.8);
-            color = vec4(mix(dark_color, regular_color, brightness), 1.0);
-        }
-    "#;
-
-    let program = glium::Program::from_source(&display, vertex_shader, pixel_shader, None).unwrap();
+    let mut user_params = UserDefinedParams {
+        rotation: Rotation { x: 0.0, y: 0.0, z: 0.0 }
+    };
 
     event_loop.run(move |event, _, control_flow| {
         let next_frame_time = std::time::Instant::now() + std::time::Duration::from_millis(16);
@@ -62,6 +67,15 @@ fn main() {
                     *control_flow = glutin::event_loop::ControlFlow::Exit;
                     return;
                 },
+                WindowEvent::KeyboardInput { input,.. } => match input.state {
+                    ElementState::Pressed => {
+                        match input.virtual_keycode {
+                            Some(keycode) => key_pressed(keycode, &mut user_params),
+                            _ => ()
+                        }
+                    },
+                    _ => ()
+                },
                 _ => return
             },
             _ => ()
@@ -69,37 +83,34 @@ fn main() {
 
         let mut target = display.draw();
 
-        let matrix = [
-            [0.01, 0.0, 0.0, 0.0],
-            [0.0, 0.01, 0.0, 0.0],
-            [0.0, 0.0, 0.01, 0.0],
-            [0.0, 0.0, 2.0, 1.0f32]
-        ];
+        let model = Model {
+            position: [0.0, 0.0, 2.0],
+            scale: 0.01
+        };
 
-        let perspective = {
-            let (width, height) = target.get_dimensions();
-            let aspect_ratio = height as f32 / width as f32;
-
-            let fov: f32 = 3.141592 / 3.0;
-            let zfar = 1024.0;
-            let znear = 0.1;
-
-            let f = 1.0 / (fov / 2.0).tan();
-
-            [
-                [f *   aspect_ratio   ,    0.0,              0.0              ,   0.0],
-                [         0.0         ,     f ,              0.0              ,   0.0],
-                [         0.0         ,    0.0,  (zfar+znear)/(zfar-znear)    ,   1.0],
-                [         0.0         ,    0.0, -(2.0*zfar*znear)/(zfar-znear),   0.0],
-            ]
+        let (width, height) = target.get_dimensions();
+        let perspective = Perspective {
+            width: width as f32,
+            height: height as f32,
+            front_of_view: 3.141592 / 3.0,
+            z_far: 1024.,
+            z_near: 0.1
         };
 
         let u_light = [-1.0, 0.4, 0.9f32];
 
+        let view = View {
+            position: [0.0, 0.0, 0.0],
+            direction: [0.0, 0.0, 1.0],
+            up: [0.0, 1.0, 0.0]
+        };
+
         let uniform = uniform! {
-            matrix: matrix,
-            perspective: perspective,
-            u_light: u_light
+            model: model.matrix(),
+            perspective: perspective.matrix(),
+            u_light: u_light,
+            view: view.matrix(),
+            rotation_angles: user_params.rotation.vec()
         };
 
         let params = glium::DrawParameters {
@@ -115,4 +126,29 @@ fn main() {
         target.draw((&positions, &normals), &indices, &program, &uniform, &params).unwrap();
         target.finish().unwrap();
     });
+}
+
+fn key_pressed(key: VirtualKeyCode, params: &mut UserDefinedParams) {
+    let rotation: &mut Rotation = &mut params.rotation;
+    match key {
+        VirtualKeyCode::Left => {
+            rotation.mutate_y_normalized(0.05);
+        },
+        VirtualKeyCode::Right => {
+            rotation.mutate_y_normalized(-0.05);
+        },
+        VirtualKeyCode::Up => {
+            rotation.mutate_x_normalized(0.05);
+        },
+        VirtualKeyCode::Down => {
+            rotation.mutate_x_normalized(-0.05);
+        },
+        VirtualKeyCode::Q => {
+            rotation.mutate_z_normalized(0.05);
+        },
+        VirtualKeyCode::E => {
+            rotation.mutate_z_normalized(-0.05);
+        },
+        _ => ()
+    }
 }

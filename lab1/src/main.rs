@@ -131,23 +131,23 @@ fn main() {
 fn key_pressed(key: VirtualKeyCode, params: &mut UserDefinedParams) {
     let rotation: &mut Rotation = &mut params.rotation;
     match key {
-        VirtualKeyCode::Left => {
-            rotation.mutate_y_normalized(0.05);
-        },
-        VirtualKeyCode::Right => {
+        VirtualKeyCode::D => {
             rotation.mutate_y_normalized(-0.05);
         },
-        VirtualKeyCode::Up => {
-            rotation.mutate_x_normalized(0.05);
+        VirtualKeyCode::A => {
+            rotation.mutate_y_normalized(0.05);
         },
-        VirtualKeyCode::Down => {
+        VirtualKeyCode::S => {
             rotation.mutate_x_normalized(-0.05);
         },
-        VirtualKeyCode::Q => {
-            rotation.mutate_z_normalized(0.05);
+        VirtualKeyCode::W => {
+            rotation.mutate_x_normalized(0.05);
         },
         VirtualKeyCode::E => {
             rotation.mutate_z_normalized(-0.05);
+        },
+        VirtualKeyCode::Q => {
+            rotation.mutate_z_normalized(0.05);
         },
         _ => ()
     }

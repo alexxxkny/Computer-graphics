@@ -1,203 +1,65 @@
-extern crate kiss3d;
-extern crate nalgebra as na;
-
-use kiss3d::conrod::{self, widget, UiCell, Colorable, Borderable};
+use kiss3d::event::{WindowEvent, MouseButton, Action};
+use kiss3d::nalgebra as na;
 use kiss3d::light::Light;
+use kiss3d::scene::PlanarSceneNode;
 use kiss3d::window::Window;
 use kiss3d::camera::{FixedView};
+use kiss3d::text::Font;
 use kiss3d::ncollide3d;
-use na::{Translation3, UnitQuaternion, Vector3, Point3, Point2, Const, Translation2, Vector2};
+use na::{Translation2, Point3, Point2, Vector2, OPoint};
 
-use std::f32::consts::PI;
-use std::path::Path;
-use std::ops::Add;
+use std::ops::{Add};
 
-use conrod::{Sizeable, Positionable, Labelable, Widget, widget_ids};
+use coordinate_converter::CoordinateConverter;
 
-const UI_WIDTH_P: f64 = 150.;
+mod coordinate_converter;
 
 const AXE_LENGTH_N: f32 = 1.6;
 
 const X_INIT_POS_N: f32 = 0.0;
 const Y_INIT_POS_N: f32 = 0.0;
-const Z_INIT_POS_N: f32 = -2.0;
 
-const Y_INIT_ROT: f32 = -45.0 / 180.0 * PI;
-
-struct Rotation {
-    x_angle: f32,
-    y_angle: f32,
-    z_angle: f32,
+struct DragAndDrop {
+    is_hovering: bool,
+    mouse_pressed: bool,
+    control_point_index: Option<u32>,
 }
 
-impl Rotation {
-    fn x(&self) -> UnitQuaternion<f32> {
-        UnitQuaternion::from_axis_angle(&Vector3::x_axis(), self.x_angle / 180.0 * PI)
-    }
-
-    fn y(&self) -> UnitQuaternion<f32> {
-        UnitQuaternion::from_axis_angle(&Vector3::y_axis(), self.y_angle / 180.0 * PI)
-    }
-
-    fn z(&self) -> UnitQuaternion<f32> {
-        UnitQuaternion::from_axis_angle(&Vector3::z_axis(), self.z_angle / 180.0 * PI)
-    }
-}
-
-// Struct to transform top-left coordinate system to centered
-struct CenteredCS {
-    window_width: u32,
-    window_height: u32,
-    axe_length: f32,
-}
-
-impl CenteredCS {
-    pub fn new(window_width: u32, window_height: u32) -> Self {
-        CenteredCS { window_width, window_height, axe_length: 2.0 }
-    }
-
-    fn belongs_n(&self, coordinate_normalized: f32) -> bool {
-        -self.axe_length / 2.0 <= coordinate_normalized && coordinate_normalized <= self.axe_length / 2.0
-    }
-
-    fn x_belongs_p(&self, x_pixels: f32) -> bool {
-        -(self.window_width as f32 / 2.0) <= x_pixels && x_pixels <= self.window_width as f32 / 2.0
-    }
-
-    fn y_belongs_p(&self, y_pixels: f32) -> bool {
-        -(self.window_height as f32 / 2.0) <= y_pixels && y_pixels <= self.window_height as f32 / 2.0
-    }
-
-    fn ensure_belongs_n(&self, coordinate_normalized: f32) -> Result<(), &str> {
-        if self.belongs_n(coordinate_normalized) {
-            Ok(())
-        } else {
-            Err("Coordinate value does not belong to coordinates system")
+impl DragAndDrop {
+    pub fn new() -> Self {
+        DragAndDrop {
+            is_hovering: false,
+            mouse_pressed: false,
+            control_point_index: None
         }
     }
 
-    fn ensure_x_belongs_p(&self, x_pixels: f32) -> Result<(), &str> {
-        if self.x_belongs_p(x_pixels) {
-            Ok(())
+    pub fn set_hovering(&mut self, point_index: Option<u32>) {
+        if self.is_hovering && self.mouse_pressed {return}
+
+        if let Some(point_index) = point_index {
+            self.is_hovering = true;
+            self.control_point_index = Some(point_index);
         } else {
-            Err("Coordinate value does not belong to coordinates system")
+            self.is_hovering = false;
+            self.control_point_index = None;
         }
     }
 
-    fn ensure_y_belongs_p(&self, y_pixels: f32) -> Result<(), &str> {
-        if self.y_belongs_p(y_pixels) {
-            Ok(())
+    pub fn set_mouse_pressed(&mut self, mouse_pressed: bool) {
+        self.mouse_pressed = mouse_pressed;
+    }
+
+    pub fn is_dragging(&self) -> Option<u32> {
+        if self.mouse_pressed {
+            self.control_point_index
         } else {
-            Err("Coordinate value does not belong to coordinates system")
+            None
         }
     }
-
-    pub fn x_p(&self, x_normalized: f32) -> f32 {
-        self.ensure_belongs_n(x_normalized).unwrap();
-
-        x_normalized * (self.window_width as f32) / 2.0
-    }
-
-    pub fn y_p(&self, y_normalized: f32) -> f32 {
-        self.ensure_belongs_n(y_normalized).unwrap();
-        
-        y_normalized * (self.window_height as f32) / 2.0
-    }
-
-    pub fn x_n(&self, x_pixels: f32) -> f32 {
-        self.ensure_x_belongs_p(x_pixels).unwrap();
-
-        x_pixels - (self.window_width as f32) / 2.0
-    }
-
-    pub fn y_n(&self, y_pixels: f32) -> f32 {
-        self.ensure_y_belongs_p(y_pixels).unwrap();
-        
-        y_pixels - (self.window_height as f32) / 2.0
-    }
-
-    pub fn width_n_to_p(&self, width_normalized: f32) -> f32 {
-        assert!(width_normalized >= 0.0 && width_normalized <= self.axe_length, "Given width is out of the scope!");
-
-        self.window_width as f32 * width_normalized
-    }
 }
 
-widget_ids! {
-    pub struct Ids {
-        canvas,
-        slider_x,
-        slider_y,
-        slider_z,
-        angle_x,
-        angle_y,
-        angle_z,
-    }
-}
-
-fn draw_ui(ui_cell: &mut UiCell, ids: &Ids, rot: &mut Rotation) {
-    let slider_w_p = 16.0;
-    let slider_h_p = 180.0;
-    let sliders_gap_p = 33.0;
-    let font_size = 11;
-
-    widget::Canvas::new()
-        .align_left()
-        .w(UI_WIDTH_P)
-        .rgb(1.0, 1.0, 1.0)
-        .border_rgb(1.0, 1.0, 1.0)
-        .set(ids.canvas, ui_cell);
-
-    for v in widget::Slider::new(rot.x_angle, -180.0, 180.0)
-        .label("X")
-        .w(slider_w_p)
-        .h(slider_h_p)
-        .left_from(ids.slider_y, sliders_gap_p)
-        .set(ids.slider_x, ui_cell) 
-    {
-        rot.x_angle = v;
-    }
-
-    widget::Text::new(&format!("{:.1}°", rot.x_angle))
-        .font_size(font_size)
-        .down_from(ids.slider_x, 10.)
-        .align_middle_x_of(ids.slider_x)
-        .set(ids.angle_x, ui_cell);
-
-    for v in widget::Slider::new(rot.y_angle, -180.0, 180.0)
-        .label("Y")
-        .w(slider_w_p)
-        .h(slider_h_p)
-        .middle_of(ids.canvas)
-        .set(ids.slider_y, ui_cell) 
-    {
-        rot.y_angle = v;
-    }
-
-    widget::Text::new(&format!("{:.1}°", rot.y_angle))
-        .font_size(font_size)
-        .down_from(ids.slider_y, 10.)
-        .align_middle_x_of(ids.slider_y)
-        .set(ids.angle_y, ui_cell);
-
-    for v in widget::Slider::new(rot.z_angle, -180.0, 180.0)
-        .label("Z")
-        .w(slider_w_p)
-        .h(slider_h_p)
-        .right_from(ids.slider_y, sliders_gap_p)
-        .set(ids.slider_z, ui_cell) 
-    {
-        rot.z_angle = v;
-    }
-
-    widget::Text::new(&format!("{:.1}°", rot.z_angle))
-        .font_size(font_size)
-        .down_from(ids.slider_z, 10.)
-        .align_middle_x_of(ids.slider_z)
-        .set(ids.angle_z, ui_cell);
-}
-
-fn draw_axes(window: &mut Window, length_normalized: f32, cs: &CenteredCS) {
+fn draw_axes(window: &mut Window, length_normalized: f32, cc: &CoordinateConverter) {
     let color = Point3::new(0.0, 0.0, 0.0);
     let init_shift = Vector2::new(X_INIT_POS_N, Y_INIT_POS_N);
 
@@ -205,13 +67,13 @@ fn draw_axes(window: &mut Window, length_normalized: f32, cs: &CenteredCS) {
 
     window.set_line_width(1.0);
     window.draw_planar_line(
-        &Point2::new(cs.x_p(half_axe), 0.0).add(init_shift),
-        &Point2::new(cs.x_p(-half_axe), 0.0).add(init_shift), 
+        &Point2::new(cc.x_centered_n_to_p(half_axe), 0.0).add(init_shift),
+        &Point2::new(cc.x_centered_n_to_p(-half_axe), 0.0).add(init_shift), 
         &color
     );
     window.draw_planar_line(
-        &Point2::new(0.0, cs.y_p(half_axe)).add(init_shift),
-        &Point2::new(0.0, cs.y_p(-half_axe)).add(init_shift), 
+        &Point2::new(0.0, cc.y_centered_n_to_p(half_axe)).add(init_shift),
+        &Point2::new(0.0, cc.y_centered_n_to_p(-half_axe)).add(init_shift), 
         &color
     );
 
@@ -224,36 +86,63 @@ fn draw_axes(window: &mut Window, length_normalized: f32, cs: &CenteredCS) {
     // X
     // /
     window.draw_planar_line(
-        &Point2::new(cs.x_p(half_axe) + label_shift + label_w, 0.0).add(init_shift),
-        &Point2::new(cs.x_p(half_axe) + label_shift, label_h).add(init_shift), 
+        &Point2::new(cc.x_centered_n_to_p(half_axe) + label_shift + label_w, 0.0).add(init_shift),
+        &Point2::new(cc.x_centered_n_to_p(half_axe) + label_shift, label_h).add(init_shift), 
         &color
     );
     // \
     window.draw_planar_line(
-        &Point2::new(cs.x_p(half_axe) + label_shift, 0.0).add(init_shift),
-        &Point2::new(cs.x_p(half_axe) + label_shift + label_w, label_h).add(init_shift), 
+        &Point2::new(cc.x_centered_n_to_p(half_axe) + label_shift, 0.0).add(init_shift),
+        &Point2::new(cc.x_centered_n_to_p(half_axe) + label_shift + label_w, label_h).add(init_shift), 
         &color
     );
     // Y
     let v_ratio = 0.55;
     // |
     window.draw_planar_line(
-        &Point2::new(0.0, cs.y_p(half_axe) + label_shift).add(init_shift),
-        &Point2::new(0.0, cs.y_p(half_axe) + label_shift + label_h * v_ratio).add(init_shift), 
+        &Point2::new(0.0, cc.y_centered_n_to_p(half_axe) + label_shift).add(init_shift),
+        &Point2::new(0.0, cc.y_centered_n_to_p(half_axe) + label_shift + label_h * v_ratio).add(init_shift), 
         &color
     );
     // /
     window.draw_planar_line(
-        &Point2::new(0.0, cs.y_p(half_axe) + label_shift + label_h * v_ratio).add(init_shift),
-        &Point2::new(label_w / 2.0, cs.y_p(half_axe) + label_shift + label_h).add(init_shift), 
+        &Point2::new(0.0, cc.y_centered_n_to_p(half_axe) + label_shift + label_h * v_ratio).add(init_shift),
+        &Point2::new(label_w / 2.0, cc.y_centered_n_to_p(half_axe) + label_shift + label_h).add(init_shift), 
         &color
     );
     // \
     window.draw_planar_line(
-        &Point2::new(0.0, cs.y_p(half_axe) + label_shift + label_h * v_ratio).add(init_shift),
-        &Point2::new(-label_w / 2.0, cs.y_p(half_axe) + label_shift + label_h).add(init_shift), 
+        &Point2::new(0.0, cc.y_centered_n_to_p(half_axe) + label_shift + label_h * v_ratio).add(init_shift),
+        &Point2::new(-label_w / 2.0, cc.y_centered_n_to_p(half_axe) + label_shift + label_h).add(init_shift), 
         &color
     );
+}
+
+fn draw_point_coordinates(window: &mut Window, point: &Point2<f32>, circle_radius: f32, cc: &CoordinateConverter) {
+    let text_color = Point3::new(0.0, 0.0, 0.0);
+    let font = 35.0;
+    let font_height = font / 3.0;
+    let font_width = font_height / 2.0;
+    let text = format!("{:.2} {:.2}", point.x, point.y);
+    let text_shift = Vector2::new(-(text.len() as f32 / 2.0 * font_width), circle_radius + font_height + 10.0);
+    
+    let shifted_point = point.add(text_shift);
+    let position = Point2::new(cc.x_centered_to_top_left_p(shifted_point.x), cc.y_centered_to_top_left_p(shifted_point.y));
+
+    window.draw_text(
+        &text, 
+        &position,
+        font, 
+        &Font::default(), 
+        &text_color
+    );
+}
+
+fn is_point_in_circle(point: &Point2<f32>, circle_center: &Point2<f32>, radius: f32) -> bool {
+    let x = point.x - circle_center.x;
+    let y = point.y - circle_center.y;
+
+    x.powi(2) + y.powi(2) <= radius.powi(2)
 }
 
 fn main() {
@@ -266,55 +155,129 @@ fn main() {
     let mut camera = FixedView::new();
 
     // State
-    let init_rot = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), Y_INIT_ROT);
-    let mut rotation = Rotation {x_angle: 0.0, y_angle: 0.0, z_angle: 0.0};
-    
-    // UI
-    let ids = Ids::new(window.conrod_ui_mut().widget_id_generator());
+    let mut cursor = Point2::new(0.0, 0.0);
 
-    let control_points = [
-        Point3::new(-0.4f32, -0.1, Z_INIT_POS_N),
-        Point3::new(-0.2f32, 0.4, Z_INIT_POS_N),
-        Point3::new(0.2f32, 0.4, Z_INIT_POS_N),
-        Point3::new(0.4f32, -0.1, Z_INIT_POS_N),
+    // Settings
+    let circle_radius = 10.0;
+    let control_point_color = Point3::new(0.6, 0.0, 0.0);
+    let control_line_color = Point3::new(0.6, 0.0, 0.0);
+    let bezier_curve_color = Point3::new(1.0, 0.0, 0.0);
+
+    // Control points
+    let mut control_points_2d_n = vec![
+        Point2::new(-0.4f32, -0.1),
+        Point2::new(-0.2f32, 0.4),
+        Point2::new(0.2f32, 0.4),
+        Point2::new(0.4f32, -0.1),
     ];
+    let control_points_count = control_points_2d_n.len();
 
-    let bezier = ncollide3d::procedural::bezier_curve(&control_points, 100);
+    // Control point's circles
+    let mut control_point_circles = <Vec<PlanarSceneNode>>::with_capacity(control_points_count);
+    for _ in 0..control_points_count {
+        let mut circle = window.add_circle(circle_radius);
+        circle.set_color(control_point_color.x, control_point_color.y, control_point_color.z);
+        control_point_circles.push(circle);
+    }
+
+    // Drag and drop helper
+    let mut dd = DragAndDrop::new();
     
     while window.render_with_camera(&mut camera) {
         let window_width = window.width();
         let window_height = window.height();
 
-        let cs = CenteredCS::new(window_width, window_height);
+        // Coordinate system helper
+        let cc = CoordinateConverter::new(window_width, window_height);
 
-        window.draw_planar_line(
-            &Point2::new(100f32, 0.0), 
-            &Point2::new(-100f32, 0.0), 
-            &Point3::new(0.0, 0.0, 0.0)
-        );
+        // Map control points to 2d centered coordinate system
+        let control_points_2d: Vec<OPoint<f32, na::Const<2>>> = control_points_2d_n
+            .iter()
+            .map(|point| {
+                Point2::new(
+                    cc.x_centered_n_to_p(point.x),
+                    cc.y_centered_n_to_p(point.y),
+                )
+            })
+            .collect();
 
-        window.draw_planar_line(
-            &Point2::new(0.0f32, 0.5), 
-            &Point2::new(0.0f32, -0.5), 
-            &Point3::new(0.0, 0.0, 0.0)
-        );
-    
-        for i in 0..control_points.len() - 1 {
-            window.draw_line(&control_points[i], &control_points[i + 1], &Point3::new(1.0, 0.0, 0.0));
+        // Get bezier curve points
+        let control_points_3d: Vec<Point3<f32>> = control_points_2d_n
+            .iter()
+            .map(|point| {
+                Point3::new(point.x, point.y, 0.0)
+            })
+            .collect();
+        let bezier: Vec<OPoint<f32, na::Const<2>>> = ncollide3d::procedural::bezier_curve(&control_points_3d, 100)
+        .iter()
+        .map(|point| {
+            Point2::new(
+                cc.x_centered_n_to_p(point.x),
+                cc.y_centered_n_to_p(point.y),
+            )
+        })
+        .collect();
+
+        // Check points hovering
+        dd.set_hovering(None);
+        for (index, point) in control_points_2d.iter().enumerate() {
+            let hovering = is_point_in_circle(&cursor, &point, circle_radius);
+            if hovering {
+                dd.set_hovering(Some(index as u32));
+                draw_point_coordinates(&mut window, point, circle_radius, &cc);
+            }
         }
 
-        for point in control_points {
-            let mut circle = window.add_sphere(0.02);
-            circle.set_local_translation(Translation3::new(point.x, point.y, point.z));
+        // Proceed drag and drop
+        if let Some(control_point_index) = dd.is_dragging() {
+            control_points_2d_n[control_point_index as usize] = Point2::new(
+                cc.x_centered_p_to_n(cursor.x),
+                cc.y_centered_p_to_n(cursor.y),
+            );
         }
 
+        // Translate point circles
+        for i in 0..control_points_2d.len() {
+            let circle = &mut control_point_circles[i];
+            let point = &control_points_2d[i];
+            circle.set_local_translation(Translation2::new(point.x, point.y));
+        }
+
+        // Control lines
+        //window.set_line_width(1.0);
+        for i in 0..control_points_2d.len() - 1 {
+            let start = control_points_2d[i];
+            let end = control_points_2d[i + 1];
+            window.draw_planar_line(&start, &end, &control_line_color);
+        }
+
+        // Bezier
+        window.set_line_width(20.0);
         for i in 0..bezier.len() - 1 {
-            window.draw_line(&bezier[i], &bezier[i + 1], &Point3::new(1.0, 0.0, 0.0));
+            window.draw_planar_line(&bezier[i], &bezier[i + 1], &bezier_curve_color);
         }
 
-        draw_axes(&mut window, AXE_LENGTH_N, &cs);
+        draw_axes(&mut window, AXE_LENGTH_N, &cc);
 
-        // let mut ui_cell = window.conrod_ui_mut().set_widgets();
-        // draw_ui(&mut ui_cell, &ids, &mut rotation);
+        for event in window.events().iter() {
+            match event.value {
+                WindowEvent::CursorPos(x, y, _modif) => {
+                    cursor = na::Point2::new(
+                        cc.x_top_left_to_centered_p(x as f32), 
+                        cc.y_top_left_to_centered_p(y as f32)
+                    );
+                },
+                WindowEvent::MouseButton(btn, action ,_) => {
+                    if let MouseButton::Button1 = btn {
+                        if let Action::Press = action {
+                            dd.set_mouse_pressed(true);
+                        } else {
+                            dd.set_mouse_pressed(false);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }

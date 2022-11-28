@@ -124,16 +124,14 @@ impl RectangleSelection {
 }
 
 struct RectangleSelectionBuilder {
-    min_selection_diagonal: f32,
     start_point: Option<Point>,
     end_point: Option<Point>,
     is_pressed: bool,
 }
 
 impl RectangleSelectionBuilder {
-    pub fn new(min_selection_diagonal: f32) -> Self {
+    pub fn new() -> Self {
         Self {
-            min_selection_diagonal: min_selection_diagonal,
             start_point: None,
             end_point: None,
             is_pressed: false
@@ -162,12 +160,6 @@ impl RectangleSelectionBuilder {
 
     fn mouse_released(&mut self, cursor: Point) {
         println!("Released: {:?}", cursor);
-        // if let Some(press_point) = self.press_point {
-        //     if self.is_selection(press_point, cursor) {
-        //         self.start_point = Some(press_point);
-        //         self.end_point = Some(cursor);
-        //     }
-        // }
         self.is_pressed = false;
     }
 
@@ -180,12 +172,6 @@ impl RectangleSelectionBuilder {
         } else {
             None
         }
-    }
-
-    fn is_selection(&self, press_point: Point, release_point: Point) -> bool {
-        ((press_point.x - release_point.x).powf(2.0) + 
-         (press_point.y - release_point.y).powf(2.0))
-        .powf(0.5) <= self.min_selection_diagonal
     }
 }
 
@@ -201,7 +187,7 @@ fn main() {
     // State
     let mut cursor = Point2::new(0.0, 0.0);
     let mut state = State::new(0);
-    let mut selection_builder = RectangleSelectionBuilder::new(30.0);
+    let mut selection_builder = RectangleSelectionBuilder::new();
 
     // UI
     let ids = Ids::new(window.conrod_ui_mut().widget_id_generator());

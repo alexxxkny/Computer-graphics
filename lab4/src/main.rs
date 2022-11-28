@@ -103,6 +103,7 @@ impl RectangleSelection {
                 Ordering::Less
             }
         });
+        points.swap(2, 3);
 
         Self {
             points: points.try_into().unwrap()
@@ -206,7 +207,10 @@ fn main() {
         for event in window.events().iter() {
             match event.value {
                 WindowEvent::CursorPos(x, y, _modif) => {
-                    cursor = Point::new(x as f32, y as f32);
+                    cursor = Point::new(
+                        cc.x_top_left_to_centered_p(x as f32), 
+                        cc.y_top_left_to_centered_p(y as f32)
+                    );
                     selection_builder.update_cursor(cursor, None);
                 },
                 WindowEvent::MouseButton(btn, action ,_) => {

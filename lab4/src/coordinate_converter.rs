@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 struct Bounds {
     pub x_right: f32,
     pub x_left: f32,

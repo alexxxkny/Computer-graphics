@@ -4,7 +4,9 @@ use kiss3d::light::Light;
 use kiss3d::window::Window;
 use kiss3d::camera::{FixedView};
 use kiss3d::conrod::{self, Sizeable, Colorable};
-use na::{Point2};
+use na::{Point2, Point3};
+
+use std::ops::Range;
 
 use conrod::{
     widget_ids, 
@@ -13,25 +15,81 @@ use conrod::{
     Positionable, Borderable, Labelable
 };
 
+use lazy_static::lazy_static;
+
 use coordinate_converter::CoordinateConverter;
 use common::*;
+use rand::Rng;
 use selection::*;
 
 mod coordinate_converter;
 mod common;
 mod selection;
 
-struct State {
-    pub lines_count: u32
+lazy_static! {
+    static ref LINE_COLOR: Point3<f32> = Point3::new(0.3, 0.3, 0.3);
 }
 
-impl State {
-    pub fn new(lines_count: u32) -> Self {
-        Self { lines_count }
+type Line = (Point, Point);
+
+struct LinesManager {
+    lines_count: u32,
+    lines: Vec<Line>,
+    count_was_changed: bool,
+    x_range: Range<f32>,
+    y_range: Range<f32>
+}
+
+impl LinesManager {
+    pub fn new() -> Self {
+        Self {
+            lines_count: 0,
+            lines: vec![],
+            count_was_changed: false,
+            x_range: 0.0..0.0,
+            y_range: 0.0..0.0
+        }
+    }
+
+    pub fn set_draw_area_size(&mut self, width: f32, height: f32) {
+        let x_abs = width / 2.0;
+        let y_abs = height / 2.0;
+        self.x_range = -x_abs..x_abs;
+        self.y_range = -y_abs..y_abs;
     }
 
     pub fn set_lines_count(&mut self, lines_count: u32) {
         self.lines_count = lines_count;
+        self.count_was_changed = true;
+    }
+
+    pub fn draw(&mut self, window: &mut Window) {
+        if self.count_was_changed {
+            self.generate_lines();
+            self.count_was_changed = false;
+        }
+
+        for line in &self.lines {
+            window.draw_planar_line(&line.0, &line.1, &LINE_COLOR);
+        }
+    }
+
+    fn generate_lines(&mut self) {
+        let mut rng = rand::thread_rng();
+
+        let mut random_point = || {
+            Point::new(
+                rng.gen_range(self.x_range.clone()),
+                rng.gen_range(self.y_range.clone()),
+            )
+        };
+
+        let mut lines = <Vec<Line>>::with_capacity(self.lines_count as usize);
+        for _ in 0..self.lines_count {
+            let line = (random_point(), random_point());
+            lines.push(line);
+        }
+        self.lines = lines;
     }
 }
 
@@ -42,7 +100,7 @@ widget_ids! {
     }
 }
 
-fn proceed_ui(ui_cell: &mut UiCell, ids: &Ids, state: &mut State) {
+fn proceed_ui(ui_cell: &mut UiCell, ids: &Ids, lines_manager: &mut LinesManager) {
     let dialer_margin = 20.0;
     let dialer_w = 120.0;
     let dialer_h = 30.0;
@@ -54,13 +112,13 @@ fn proceed_ui(ui_cell: &mut UiCell, ids: &Ids, state: &mut State) {
         .top_left()
         .set(ids.canvas, ui_cell);
 
-    for value in widget::NumberDialer::new(state.lines_count as f32, 0.0, 100.0, 0)
+    for value in widget::NumberDialer::new(lines_manager.lines_count as f32, 0.0, 100.0, 0)
         .w_h(dialer_w, dialer_h)
         .top_left_with_margin_on(ids.canvas, dialer_margin)
         .label("Lines")
         .set(ids.line_counter, ui_cell) 
     {
-        state.set_lines_count(value as u32);
+        lines_manager.set_lines_count(value as u32);
     }
 }
 
@@ -73,9 +131,9 @@ fn main() {
     // Camera
     let mut camera = FixedView::new();
 
-    // State
+    // LinesManager
     let mut cursor = Point2::new(0.0, 0.0);
-    let mut state = State::new(0);
+    let mut lines_manager = LinesManager::new();
     let mut selection_builder = RectangleSelectionBuilder::new();
 
     // UI
@@ -85,11 +143,17 @@ fn main() {
         let window_width = window.width();
         let window_height = window.height();
 
+        let draw_area_part = 0.9;
+        lines_manager.set_draw_area_size(
+            window_width as f32 * draw_area_part, 
+            window_height as f32 * draw_area_part
+        );
+
         // Coordinate system helper
         let cc = CoordinateConverter::new(window_width, window_height);
 
         let mut ui_cell = window.conrod_ui_mut().set_widgets();
-        proceed_ui(&mut ui_cell, &ids, &mut state);
+        proceed_ui(&mut ui_cell, &ids, &mut lines_manager);
         drop(ui_cell);
 
         for event in window.events().iter() {
@@ -113,6 +177,8 @@ fn main() {
         if let Some(selection) = selection_builder.build() {
             selection.draw(&mut window);
         }
+
+        lines_manager.draw(&mut window);
 
     }
 }

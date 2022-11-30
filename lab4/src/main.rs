@@ -27,15 +27,13 @@ mod common;
 mod selection;
 
 lazy_static! {
-    static ref LINE_COLOR: Point3<f32> = Point3::new(0.3, 0.3, 0.3);
+    static ref LINE_COLOR: Point3<f32> = Point3::new(0.6, 0.6, 0.6);
+    static ref SELECTED_LINE_COLOR: Point3<f32> = Point3::new(1.0, 0.0, 0.0);
 }
-
-type Line = (Point, Point);
 
 struct LinesManager {
     lines_count: u32,
     lines: Vec<Line>,
-    count_was_changed: bool,
     x_range: Range<f32>,
     y_range: Range<f32>
 }
@@ -45,7 +43,6 @@ impl LinesManager {
         Self {
             lines_count: 0,
             lines: vec![],
-            count_was_changed: false,
             x_range: 0.0..0.0,
             y_range: 0.0..0.0
         }
@@ -60,17 +57,29 @@ impl LinesManager {
 
     pub fn set_lines_count(&mut self, lines_count: u32) {
         self.lines_count = lines_count;
-        self.count_was_changed = true;
+        self.generate_lines();
     }
 
     pub fn draw(&mut self, window: &mut Window) {
-        if self.count_was_changed {
-            self.generate_lines();
-            self.count_was_changed = false;
-        }
-
         for line in &self.lines {
             window.draw_planar_line(&line.0, &line.1, &LINE_COLOR);
+        }
+    }
+
+    pub fn draw_with_selection_check(&mut self, window: &mut Window, selection: RectangleSelection) {
+        for line in &self.lines {
+            match selection.clipping_check(line) {
+                LineClipping::Inside => {
+                    window.draw_planar_line(&line.0, &line.1, &SELECTED_LINE_COLOR);
+                },
+                LineClipping::PartlyInside(inside_line_part) => {
+                    window.draw_planar_line(&line.0, &line.1, &LINE_COLOR);
+                    window.draw_planar_line(&inside_line_part.0, &inside_line_part.1, &SELECTED_LINE_COLOR);
+                },
+                LineClipping::Outside => {
+                    window.draw_planar_line(&line.0, &line.1, &LINE_COLOR);
+                }
+            }
         }
     }
 
@@ -125,6 +134,7 @@ fn proceed_ui(ui_cell: &mut UiCell, ids: &Ids, lines_manager: &mut LinesManager)
 fn main() {
     // Window
     let mut window = Window::new("Kiss3d: obj");
+    window.set_line_width(2.0);
     window.set_light(Light::StickToCamera);
     window.set_background_color(1.0, 1.0, 1.0);
 
@@ -176,9 +186,9 @@ fn main() {
 
         if let Some(selection) = selection_builder.build() {
             selection.draw(&mut window);
+            lines_manager.draw_with_selection_check(&mut window, selection);
+        } else {
+            lines_manager.draw(&mut window);
         }
-
-        lines_manager.draw(&mut window);
-
     }
 }
